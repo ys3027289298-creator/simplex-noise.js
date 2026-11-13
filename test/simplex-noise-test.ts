@@ -200,3 +200,103 @@ describe('createNoise4D', () => {
     });
   });
 });
+
+describe('periodic noise', () => {
+  it('rejects zero periods', function () {
+    assert.throws(() => createNoise2D(getRandom(), [0, 4]), /positive integer/);
+    assert.throws(() => createNoise3D(getRandom(), [4, 0, 2]), /positive integer/);
+    assert.throws(() => createNoise4D(getRandom(), [4, 4, 4, 0]), /positive integer/);
+  });
+  it('rejects non-integer periods', function () {
+    assert.throws(() => createNoise2D(getRandom(), [1.5, 4]), /positive integer/);
+    assert.throws(() => createNoise3D(getRandom(), [4, -2.5, 2]), /positive integer/);
+    assert.throws(() => createNoise4D(getRandom(), [4, NaN, 4, 4]), /positive integer/);
+  });
+  it('accepts periods larger than 256 and still tiles exactly', function () {
+    const noise2 = createNoise2D(getRandom('big'), [1000, 512]);
+    assert.closeTo(noise2(123.456, 7.89), noise2(123.456 + 1000, 7.89), 1e-12);
+    // the seam itself stays bitwise exact regardless of the period size
+    assert.equal(noise2(1000, 7.89), noise2(0, 7.89));
+    const noise3 = createNoise3D(getRandom('big'), [2048, 333, 777]);
+    assert.closeTo(noise3(1, 2, 3), noise3(1, 2 + 333, 3), 1e-12);
+    assert.equal(noise3(1, 333, 3), noise3(1, 0, 3));
+  });
+  it('rejects a period count that does not match the dimension', function () {
+    assert.throws(() => createNoise2D(getRandom(), [4] as unknown as [number, number]), /expected 2 periods/);
+    assert.throws(() => createNoise3D(getRandom(), [4, 4] as unknown as [number, number, number]), /expected 3 periods/);
+  });
+  it('throws at construction time, before any evaluation', function () {
+    assert.throws(() => createNoise2D(getRandom(), [0, 1]));
+  });
+  it('2D is exactly periodic on both axes, including negative coordinates', function () {
+    const noise = createNoise2D(getRandom('tile'), [8, 8]);
+    for (let i = 0; i < 128; i++) {
+      const x = getRandom('x' + i)() * 8;
+      const y = getRandom('y' + i)() * 8;
+      // interior repeats run through different FP arithmetic, so they match
+      // to floating point precision (a few ULP); seam points match bitwise
+      assert.closeTo(noise(x, y), noise(x + 8, y), 1e-14);
+      assert.closeTo(noise(x, y), noise(x, y + 8), 1e-14);
+      assert.closeTo(noise(x, y), noise(x - 24, y + 16), 1e-14);
+    }
+  });
+  it('2D has a bitwise identical and first-difference continuous seam', function () {
+    const noise = createNoise2D(getRandom('tile'), [8, 8]);
+    for (const eps of [1e-2, 1e-4, 1e-9]) {
+      for (let i = 0; i < 64; i++) {
+        const y = i / 64 * 8;
+        assert.equal(noise(8, y), noise(0, y));
+        assert.equal(noise(8 - eps, y), noise(-eps, y));
+      }
+    }
+  });
+  it('3D is exactly periodic on every axis', function () {
+    const noise = createNoise3D(getRandom('tile3'), [6, 6, 4]);
+    for (let i = 0; i < 128; i++) {
+      const x = getRandom('x3' + i)() * 6;
+      const y = getRandom('y3' + i)() * 6;
+      const z = getRandom('z3' + i)() * 4;
+      assert.closeTo(noise(x, y, z), noise(x + 6, y, z), 1e-14);
+      assert.closeTo(noise(x, y, z), noise(x, y + 6, z), 1e-14);
+      assert.closeTo(noise(x, y, z), noise(x, y, z + 4), 1e-14);
+      assert.closeTo(noise(x, y, z), noise(x - 12, y + 12, z - 8), 1e-14);
+    }
+  });
+  it('3D has a first-difference continuous seam on every axis', function () {
+    const noise = createNoise3D(getRandom('tile3'), [6, 6, 4]);
+    for (const eps of [1e-2, 1e-4, 1e-9]) {
+      for (let i = 0; i < 64; i++) {
+        const t = i / 64 * 4;
+        assert.equal(noise(6 - eps, t, 1), noise(-eps, t, 1));
+        assert.equal(noise(1, 6 - eps, t), noise(1, -eps, t));
+        assert.equal(noise(t, 1, 4 - eps), noise(t, 1, -eps));
+      }
+    }
+  });
+  it('4D is exactly periodic on every axis', function () {
+    const noise = createNoise4D(getRandom('tile4'), [6, 6, 4, 4]);
+    const x = 1.23, y = 2.34, z = 0.56, w = 3.21;
+    assert.closeTo(noise(x, y, z, w), noise(x + 6, y, z, w), 1e-14);
+    assert.closeTo(noise(x, y, z, w), noise(x, y + 6, z, w), 1e-14);
+    assert.closeTo(noise(x, y, z, w), noise(x, y, z + 4, w), 1e-14);
+    assert.closeTo(noise(x, y, z, w), noise(x, y, z, w + 4), 1e-14);
+  });
+  it('supports independent per-dimension periods', function () {
+    const noise = createNoise2D(getRandom('rect'), [16, 4]);
+    assert.closeTo(noise(3.3, 1.2), noise(3.3 + 16, 1.2), 1e-14);
+    assert.closeTo(noise(3.3, 1.2), noise(3.3, 1.2 + 4), 1e-14);
+    assert.notEqual(noise(3.3, 1.2), noise(3.3 + 4, 1.2));
+  });
+  it('is deterministic for the same seed and periods', function () {
+    const a = createNoise2D(getRandom('det'), [8, 8]);
+    const b = createNoise2D(getRandom('det'), [8, 8]);
+    assert.equal(a(1.23, 4.56), b(1.23, 4.56));
+  });
+  it('stays within [-1, 1] across tile repetitions', function () {
+    const noise3 = createNoise3D(getRandom('range'), [8, 8, 8]);
+    for (let i = 0; i < 200; i++) {
+      const v = noise3(getRandom('r' + i)() * 40 - 20, getRandom('s' + i)() * 40 - 20, i % 8);
+      assert(v >= -1 && v <= 1);
+    }
+  });
+});

@@ -83,6 +83,31 @@ console.log(noise2D(x, y));
 
 The ALEA PRNG used in the example above can be found in the [alea](https://npmjs.org/package/alea) npm package.
 
+### Tileable (periodic) noise
+
+Pass a per-dimension array of positive integer periods as the second
+argument to get a noise field that repeats exactly every `periods[d]`
+units along dimension `d`, with strictly continuous tile boundaries.
+The periodic function shares the exact same permutation table and gradient
+hashing as the non-periodic one; only lattice indices are reduced modulo
+the periods, so no second noise implementation is introduced.
+
+```javascript
+import alea from 'alea';
+import { createNoise2D, createNoise3D } from 'simplex-noise';
+
+// repeats every 16 units in x and every 8 units in y
+const tile2D = createNoise2D(alea('seed'), [16, 8]);
+console.log(tile2D(0, 0) === tile2D(16, 0)); // true, bitwise identical seam
+
+// independent periods per dimension
+const tile3D = createNoise3D(alea('seed'), [16, 16, 4]);
+```
+
+Omitting the argument keeps the original non-periodic behavior and output.
+Invalid periods (`0`, negative or non-integer values, or a length that does
+not match the dimension) throw an `Error` when the noise function is created.
+
 ## Benchmarks
 
 simplex-noise.js is reasonably quick.
