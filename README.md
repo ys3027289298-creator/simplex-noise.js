@@ -62,6 +62,31 @@ const noise4D = createNoise4D();
 console.log(noise4D(x, y, z, w));
 ```
 
+### Smooth interpolation
+
+Two easing/interpolation curves are provided for smoothing transitions.
+Both are defined on the closed interval `[0, 1]` with `f(0) = 0` and
+`f(1) = 1`, and a zero first derivative at both boundaries so segments join
+without a visible kink.
+
+- `smoothstep(t) = t * t * (3 - 2 * t)` — cubic, C1-continuous
+- `quintic(t) = t * t * t * (t * (t * 6 - 15) + 10)` — quintic, C2-continuous
+
+```javascript
+import { smoothstep, quintic } from 'simplex-noise';
+
+console.log(smoothstep(0.5)); // 0.5
+console.log(quintic(0.25));   // 0.103515625
+```
+
+The parameter is never clamped. Passing a value outside `[0, 1]`, or a
+non-finite value (`NaN`, `+/-Infinity`), throws a `RangeError`:
+
+```javascript
+smoothstep(1.5); // throws RangeError
+quintic(Number.NaN); // throws RangeError
+```
+
 ### Using a seed value
 
 By default simplex-noise.js will use Math.random() to seed the noise.

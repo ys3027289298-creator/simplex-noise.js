@@ -89,6 +89,74 @@ const grad4 = /*#__PURE__*/ new Float64Array([0, 1, 1, 1, 0, 1, 1, -1, 0, 1, -1,
   -1, 1, 1, 0, -1, 1, -1, 0, -1, -1, 1, 0, -1, -1, -1, 0]);
 
 /**
+ * A smooth interpolation function.
+ *
+ * The argument `t` must be a finite number inside the closed interval [0, 1].
+ * The returned value is always inside the same interval [0, 1] with
+ * f(0) = 0 and f(1) = 1.
+ * @param t the interpolation parameter, 0 <= t <= 1
+ */
+export type InterpolationFunction = (t: number) => number;
+
+/**
+ * Validates the domain of an interpolation parameter and evaluates the given
+ * polynomial with Horner's method. Shared by every interpolation curve so the
+ * hashing/noise code and the interpolation helpers rely on the same
+ * implementation primitives.
+ *
+ * The parameter is never clamped: values outside the closed interval [0, 1]
+ * and non-finite values (NaN, +/-Infinity) make the function throw a
+ * RangeError instead of being silently clipped to the boundary.
+ * @private
+ */
+function evaluateInterpolationPolynomial(t: number, coefficients: number[]): number {
+  if (typeof t !== 'number' || Number.isNaN(t) || t < 0 || t > 1) {
+    throw new RangeError('interpolation parameter t must be a finite number within [0, 1]');
+  }
+  let result = 0;
+  for (let i = 0; i < coefficients.length; i++) {
+    result = result * t + coefficients[i];
+  }
+  return result;
+}
+
+/**
+ * Cubic smoothstep interpolation curve (Ken Perlin's smoothstep).
+ *
+ * Defined on the closed interval [0, 1] as `f(t) = t * t * (3 - 2 * t)`.
+ * It is C1-continuous (the first derivative is continuous everywhere) with
+ * f(0) = 0, f(1) = 1 and zero first derivative at both boundaries, which
+ * removes the visible kinks of a linear interpolation.
+ *
+ * Values outside [0, 1] and non-finite values throw a RangeError; the input
+ * is never clamped.
+ * @param t the interpolation parameter, 0 <= t <= 1
+ * @returns a value in [0, 1]
+ */
+export const smoothstep: InterpolationFunction = function smoothstep(t: number): number {
+  return evaluateInterpolationPolynomial(t, [-2, 3, 0, 0]);
+};
+
+/**
+ * Quintic (fifth-degree) smooth interpolation curve, also known as the
+ * improved Perlin fade curve.
+ *
+ * Defined on the closed interval [0, 1] as
+ * `f(t) = t * t * t * (t * (t * 6 - 15) + 10)`.
+ * It is C2-continuous (the first and second derivatives are both continuous
+ * everywhere) with f(0) = 0, f(1) = 1 and zero first and second derivatives
+ * at both boundaries, giving an even smoother transition than smoothstep.
+ *
+ * Values outside [0, 1] and non-finite values throw a RangeError; the input
+ * is never clamped.
+ * @param t the interpolation parameter, 0 <= t <= 1
+ * @returns a value in [0, 1]
+ */
+export const quintic: InterpolationFunction = function quintic(t: number): number {
+  return evaluateInterpolationPolynomial(t, [6, -15, 10, 0, 0, 0]);
+};
+
+/**
  * A random() function, must return a number in the interval [0,1), just like Math.random().
  */
 export type RandomFn = () => number;

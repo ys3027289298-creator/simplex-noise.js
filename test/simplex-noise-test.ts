@@ -1,5 +1,11 @@
-import { createNoise2D, createNoise3D, createNoise4D } from '../simplex-noise';
-import { buildPermutationTable } from '../simplex-noise';
+import {
+  buildPermutationTable,
+  createNoise2D,
+  createNoise3D,
+  createNoise4D,
+  smoothstep,
+  quintic,
+} from '../simplex-noise';
 import alea from 'alea';
 import { assert } from 'chai';
 
@@ -198,5 +204,81 @@ describe('createNoise4D', () => {
       const actual = sampleFunctionToImageDataOne((x, y) => noise4D(x * 1000, y * 1000, (x + y) * 500, (x - y) * 500), size, size);
       assertMatchesImage(actual, 'noise4Dlarge.png');
     });
+  });
+});
+
+describe('interpolation curves', () => {
+  const points = [0, 0.25, 0.5, 0.75, 1];
+  const curves = [
+    {
+      name: 'smoothstep',
+      fn: smoothstep,
+      values: [0, 5 / 32, 0.5, 27 / 32, 1],
+      // f'(t) = 6t(1 - t)
+      derivativeAt: (t: number) => 6 * t * (1 - t),
+    },
+    {
+      name: 'quintic',
+      fn: quintic,
+      values: [0, 0.103515625, 0.5, 0.896484375, 1],
+      // f'(t) = 30 t^2 (1 - t)^2
+      derivativeAt: (t: number) => 30 * t * t * (1 - t) * (1 - t),
+    },
+  ];
+
+  for (const curve of curves) {
+    describe(curve.name, () => {
+      it('matches the analytic value table', function () {
+        points.forEach((t, i) => {
+          assert.strictEqual(curve.fn(t), curve.values[i]);
+        });
+      });
+      it('has a continuous first derivative matching the analytic formula', function () {
+        const h = 1e-6;
+        points.forEach(t => {
+          let numericalDerivative;
+          if (t === 0) {
+            numericalDerivative = curve.fn(h) / h;
+          }
+          else if (t === 1) {
+            numericalDerivative = (1 - curve.fn(1 - h)) / h;
+          }
+          else {
+            numericalDerivative = (curve.fn(t + h) - curve.fn(t - h)) / (2 * h);
+          }
+          assert(Math.abs(numericalDerivative - curve.derivativeAt(t)) < 1e-4);
+        });
+      });
+      it('has zero first derivative at both boundaries', function () {
+        assert.strictEqual(curve.derivativeAt(0), 0);
+        assert.strictEqual(curve.derivativeAt(1), 0);
+      });
+      it('is symmetric and maps into [0, 1]', function () {
+        for (let i = 0; i <= 100; i++) {
+          const t = i / 100;
+          const value = curve.fn(t);
+          assert(Math.abs(value + curve.fn(1 - t) - 1) < 1e-14);
+          assert(value >= 0 && value <= 1);
+        }
+      });
+      it('throws a RangeError instead of clamping out-of-domain parameters', function () {
+        const invalid = [-1, -0.0001, 1.0001, 2, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+        for (const t of invalid) {
+          assert.throws(() => curve.fn(t), RangeError);
+        }
+      });
+      it('accepts the boundary values 0 and 1 without throwing', function () {
+        assert.doesNotThrow(() => curve.fn(0));
+        assert.doesNotThrow(() => curve.fn(1));
+      });
+    });
+  }
+
+  it('quintic leaves the midpoint region flatter than smoothstep', function () {
+    // Both equal 0.5 at the midpoint, but quintic deviates less from the
+    // endpoints near the boundaries, demonstrating the smoother transition.
+    assert(quintic(0.1) < smoothstep(0.1));
+    assert(quintic(0.9) > smoothstep(0.9));
+    assert.strictEqual(quintic(0.5), smoothstep(0.5));
   });
 });
