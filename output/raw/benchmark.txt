@@ -1,0 +1,34 @@
+Fixed grid: 256x256 = 65536 samples/frame
+Measured frames per setting: 30 (after 5 warmup frames)
+
+2D
+pointsPerCell | frame ms | ns/sample | f2 frame ms | ratio vs simplex
+--------------|----------|-----------|-------------|-----------------
+            1 |    1.463 |     22.33 |       1.674 | 1.65x
+            2 |    4.600 |     70.19 |       4.296 | 5.19x
+            3 |    7.492 |    114.32 |       7.774 | 8.45x
+            4 |    9.387 |    143.23 |       9.736 | 10.58x
+            6 |   14.377 |    219.37 |      14.479 | 16.21x
+            8 |   20.000 |    305.17 |      19.552 | 22.54x
+           12 |   37.895 |    578.23 |      48.194 | 42.72x
+           16 |   57.590 |    878.75 |      56.196 | 64.92x
+simplex baseline frame: 0.887 ms
+
+3D
+pointsPerCell | frame ms | ns/sample | f2 frame ms | ratio vs simplex
+--------------|----------|-----------|-------------|-----------------
+            1 |    4.227 |     64.49 |       4.448 | 3.45x
+            2 |   13.247 |    202.14 |      12.646 | 10.82x
+            3 |   17.665 |    269.55 |      17.608 | 14.43x
+            4 |   23.178 |    353.67 |      22.990 | 18.93x
+            6 |   36.265 |    553.36 |      36.274 | 29.62x
+            8 |   53.863 |    821.89 |      55.705 | 44.00x
+           12 |  117.404 |   1791.44 |     103.642 | 95.90x
+           16 |  163.124 |   2489.07 |     166.667 | 133.24x
+simplex baseline frame: 1.224 ms
+
+Default (pointsPerCell=1) ratio: 2D 1.65x, 3D 3.45x
+Worst ratio across point counts: 2D 64.92x, 3D 133.24x
+
+3x simplex budget, 2D default: PASS (1.65x)
+3x simplex budget, 3D default: FAIL (3.45x)

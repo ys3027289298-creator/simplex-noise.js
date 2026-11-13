@@ -1,0 +1,80 @@
+
+
+  createCellular2D
+    cellular2D
+      ✔ is initialized randomly without arguments
+      ✔ should return the same value for the same input
+      ✔ should return a different value for a different input
+      ✔ should return the same output with the same seed
+      ✔ should return a different output with a different seed
+      ✔ exposes F1 and F2 with F1 <= F2 and non negative distances
+      ✔ is continuous when crossing cell borders
+      ✔ supports the manhattan metric
+      ✔ supports the chebyshev metric
+      ✔ different metrics produce different distance fields
+      ✔ honours pointsPerCell and keeps results reproducible
+      ✔ shares the permutation table primitive with simplex
+      ✔ should match snapshot for F1
+      ✔ should match snapshot for F2
+      ✔ should match snapshot for manhattan metric
+
+  createCellular3D
+    cellular3D
+      ✔ is initialized randomly without arguments
+      ✔ should return the same value for the same input
+      ✔ should return the same output with the same seed
+      ✔ should return a different output with a different seed
+      ✔ exposes F1 and F2 with F1 <= F2
+      ✔ supports every metric and pointsPerCell reproducibly
+      ✔ should match snapshot for an F1 slice
+
+  cellular and simplex coexistence
+    ✔ simplex outputs stay bit identical next to cellular instances
+
+  buildPermutationTable
+    ✔ first half contains all indices exactly once
+    ✔ is shuffled
+    ✔ second half mirrors first half
+    ✔ can contain 0 in the first position
+    ✔ matches snapshot
+
+  createNoise2D
+    noise2D
+      ✔ is initialized randomly without arguments
+      ✔ should return the same value for the same input
+      ✔ should return a different value for a different input
+      ✔ should return the same output with the same seed
+      ✔ should return a different output with a different seed
+      ✔ should return values between -1 and 1
+      ✔ should return similar values for similar inputs
+      ✔ should match snapshot for small inputs
+      ✔ should match snapshot for large inputs
+      ✔ should match snapshot for gigantic inputs
+
+  createNoise3D
+    noise3D
+      ✔ is initialized randomly without arguments
+      ✔ should return the same value for the same input
+      ✔ should return a different value for a different input
+      ✔ should return the same output with the same seed
+      ✔ should return a different output with a different seed
+      ✔ should return values between -1 and 1
+      ✔ should return similar values for similar inputs
+      ✔ should match snapshot for small inputs
+      ✔ should match snapshot for large inputs
+
+  createNoise4D
+    noise4D
+      ✔ is initialized randomly without arguments
+      ✔ should return the same value for the same input
+      ✔ should return a different value for a different input
+      ✔ should return the same output with the same seed
+      ✔ should return a different output with a different seed
+      ✔ should return values between -1 and 1
+      ✔ should return similar values for similar inputs
+      ✔ should match snapshot for small inputs
+      ✔ should match snapshot for large inputs
+
+
+  56 passing (67ms)
+

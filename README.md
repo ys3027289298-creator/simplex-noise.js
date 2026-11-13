@@ -62,6 +62,38 @@ const noise4D = createNoise4D();
 console.log(noise4D(x, y, z, w));
 ```
 
+### Worley / cellular noise (2D and 3D)
+
+Cellular (Worley) noise produces the cell-like patterns used for stone, marble
+and crack textures. It reuses the same permutation table hashing and
+`fastFloor` primitive as the simplex functions; the added code only performs
+the feature point search and the distance combination. Each call returns the
+F1 and F2 feature point distances separately.
+
+```javascript
+import { createCellular2D, createCellular3D } from 'simplex-noise';
+
+// one feature point per cell by default, euclidean distance
+const cellular2D = createCellular2D();
+const { f1, f2 } = cellular2D(x, y);
+// classic cellular look: f2 - f1 draws the cell borders
+const cellBorders = f2 - f1;
+
+// switch the distance metric and the number of feature points per cell
+const manhattan = createCellular2D(prng, { metric: 'manhattan' });
+const chebyshev = createCellular2D(prng, { metric: 'chebyshev' });
+const dense = createCellular2D(prng, { pointsPerCell: 4 });
+
+// the same options are available in three dimensions
+const cellular3D = createCellular3D(prng, { metric: 'euclidean', pointsPerCell: 1 });
+const r = cellular3D(x, y, z);
+console.log(r.f1, r.f2);
+```
+
+`metric` is one of `'euclidean'` (default), `'manhattan'` or `'chebyshev'` and
+`pointsPerCell` is a positive integer (default `1`). Like the simplex
+functions, passing the same seeded PRNG reproduces identical values.
+
 ### Using a seed value
 
 By default simplex-noise.js will use Math.random() to seed the noise.

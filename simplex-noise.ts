@@ -475,6 +475,579 @@ export function createNoise4D(random: RandomFn = Math.random): NoiseFunction4D {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Worley / cellular noise
+//
+// The cellular implementation does not introduce any new hashing primitive:
+// the same `fastFloor` and the same `perm` permutation table used by the
+// simplex functions identify the grid cells. The code added below is only
+// responsible for searching the feature points of the neighbouring cells and
+// combining their distances (F1 / F2).
+// ---------------------------------------------------------------------------
+
+/**
+ * Distance metrics supported by the cellular noise functions.
+ *
+ * - `euclidean`: straight line distance (the classic Worley metric)
+ * - `manhattan`: taxicab / L1 distance
+ * - `chebyshev`: chessboard / L-infinity distance
+ */
+export type CellularMetric = 'euclidean' | 'manhattan' | 'chebyshev';
+
+export interface CellularOptions {
+  /**
+   * Distance metric used while searching for feature points.
+   * Defaults to `euclidean`.
+   */
+  metric?: CellularMetric;
+  /**
+   * Number of feature points placed in every grid cell.
+   * Defaults to 1. Must be a positive integer.
+   */
+  pointsPerCell?: number;
+}
+
+/**
+ * The two closest feature point distances found for a sample position.
+ * Both values use the selected metric directly (already square rooted for
+ * the euclidean metric), so they can be combined freely, e.g. `f2 - f1`.
+ */
+export interface CellularResult {
+  /** Distance to the closest feature point. */
+  f1: number;
+  /** Distance to the second closest feature point. */
+  f2: number;
+}
+
+/**
+ * Samples a cellular noise field in two dimensions.
+ * @param x
+ * @param y
+ * @returns the F1 and F2 feature point distances
+ */
+export type CellularFunction2D = (x: number, y: number) => CellularResult;
+
+/**
+ * Samples a cellular noise field in three dimensions.
+ * @param x
+ * @param y
+ * @param z
+ * @returns the F1 and F2 feature point distances
+ */
+export type CellularFunction3D = (x: number, y: number, z: number) => CellularResult;
+
+// Multiplicative congruential constants used once while deriving the jitter
+// table from the shared permutation table. All arithmetic stays in 32 bit
+// integers, which keeps the generated points identical on every platform.
+const CELL_RANDOM_MULTIPLIER = 1664525;
+const CELL_RANDOM_INCREMENT = 1013904223;
+const TWO_POW_32 = 4294967296;
+
+/**
+ * Builds the per-factory jitter table. Every entry is a deterministic feature
+ * point offset in the interval [0, 1) per axis. The table is indexed through
+ * the same permutation table hashing used by the simplex implementations, so
+ * no second hashing primitive is introduced: a cell hash selects an entry and
+ * the cellular code only performs the neighbour search and distance work.
+ *
+ * @param components number of offset components per entry (2 or 3)
+ */
+function buildJitterTable(components: number): Float64Array {
+  const table = new Float64Array(512 * components);
+  for (let entry = 0; entry < 512; entry++) {
+    // a non-zero seed keeps the first LCG step well defined
+    let state = Math.imul(entry + 1, 0x9e3779b1) >>> 0;
+    for (let component = 0; component < components; component++) {
+      state = (Math.imul(state, CELL_RANDOM_MULTIPLIER) + CELL_RANDOM_INCREMENT) >>> 0;
+      table[entry * components + component] = state / TWO_POW_32;
+    }
+  }
+  return table;
+}
+
+/**
+ * Selects the jitter table entry for one of the feature points of a cell.
+ * The cell hash comes straight from the shared permutation table. The point
+ * index is folded in through multiplicative LCG steps rather than a plain
+ * offset so that the feature points of a single cell never alias the same
+ * table entry while point 0 keeps using the cell hash directly.
+ */
+function jitterEntry(cellHash: number, point: number): number {
+  let entry = cellHash;
+  for (let step = 0; step < point; step++) {
+    entry = (Math.imul(entry, CELL_RANDOM_MULTIPLIER) + CELL_RANDOM_INCREMENT) >>> 0;
+  }
+  return entry & 511;
+}
+
+/**
+ * Creates a 2D Worley/cellular noise function.
+ *
+ * Grid cells are identified with the same permutation table hashing used by
+ * {@link createNoise2D}; only the feature point search and the F1/F2 distance
+ * combination are specific to this function.
+ * @param random the random function that will be used to build the permutation table
+ * @param options metric and feature point density options
+ * @returns {CellularFunction2D}
+ */
+export function createCellular2D(random: RandomFn = Math.random, options: CellularOptions = {}): CellularFunction2D {
+  const perm = buildPermutationTable(random);
+  const metric: CellularMetric = options.metric === undefined ? 'euclidean' : options.metric;
+  const pointsPerCell = Math.max(1, Math.floor(options.pointsPerCell === undefined ? 1 : options.pointsPerCell));
+  // two jitter components per entry, all derived from the shared permutation table
+  const jitter = buildJitterTable(2);
+  const result: CellularResult = { f1: 0, f2: 0 };
+  // Fast path for the common single feature point case: no per-point loop and
+  // no salt computation, the cell hash indexes the jitter table directly.
+  if (pointsPerCell === 1) {
+    if (metric === 'manhattan') {
+      return function cellular2DManhattan(x: number, y: number): CellularResult {
+        const ix = fastFloor(x);
+        const iy = fastFloor(y);
+        let f1 = Infinity;
+        let f2 = Infinity;
+        for (let oy = -1; oy <= 1; oy++) {
+          const cy = iy + oy;
+          const rowHash = perm[cy & 255];
+          for (let ox = -1; ox <= 1; ox++) {
+            const cx = ix + ox;
+            const j = perm[(cx & 255) + rowHash] * 2;
+            const distance = Math.abs(cx + jitter[j] - x) + Math.abs(cy + jitter[j + 1] - y);
+            if (distance < f1) {
+              f2 = f1;
+              f1 = distance;
+            }
+            else if (distance < f2) {
+              f2 = distance;
+            }
+          }
+        }
+        result.f1 = f1;
+        result.f2 = f2;
+        return result;
+      };
+    }
+    if (metric === 'chebyshev') {
+      return function cellular2DChebyshev(x: number, y: number): CellularResult {
+        const ix = fastFloor(x);
+        const iy = fastFloor(y);
+        let f1 = Infinity;
+        let f2 = Infinity;
+        for (let oy = -1; oy <= 1; oy++) {
+          const cy = iy + oy;
+          const rowHash = perm[cy & 255];
+          for (let ox = -1; ox <= 1; ox++) {
+            const cx = ix + ox;
+            const j = perm[(cx & 255) + rowHash] * 2;
+            const distance = Math.max(Math.abs(cx + jitter[j] - x), Math.abs(cy + jitter[j + 1] - y));
+            if (distance < f1) {
+              f2 = f1;
+              f1 = distance;
+            }
+            else if (distance < f2) {
+              f2 = distance;
+            }
+          }
+        }
+        result.f1 = f1;
+        result.f2 = f2;
+        return result;
+      };
+    }
+    return function cellular2D(x: number, y: number): CellularResult {
+      const ix = fastFloor(x);
+      const iy = fastFloor(y);
+      let f1 = Infinity;
+      let f2 = Infinity;
+      for (let oy = -1; oy <= 1; oy++) {
+        const cy = iy + oy;
+        const rowHash = perm[cy & 255];
+        for (let ox = -1; ox <= 1; ox++) {
+          const cx = ix + ox;
+          const j = perm[(cx & 255) + rowHash] * 2;
+          const dx = cx + jitter[j] - x;
+          const dy = cy + jitter[j + 1] - y;
+          const distance = dx * dx + dy * dy;
+          if (distance < f1) {
+            f2 = f1;
+            f1 = distance;
+          }
+          else if (distance < f2) {
+            f2 = distance;
+          }
+        }
+      }
+      result.f1 = Math.sqrt(f1);
+      result.f2 = Math.sqrt(f2);
+      return result;
+    };
+  }
+  // Resolve the metric once per created function instead of once per sample.
+  if (metric === 'manhattan') {
+    return function cellular2DManhattan(x: number, y: number): CellularResult {
+      const ix = fastFloor(x);
+      const iy = fastFloor(y);
+      let f1 = Infinity;
+      let f2 = Infinity;
+      for (let oy = -1; oy <= 1; oy++) {
+        const cy = iy + oy;
+        const rowHash = perm[cy & 255];
+        for (let ox = -1; ox <= 1; ox++) {
+          const cx = ix + ox;
+          // identical cell hashing scheme as the 2D simplex implementation
+          const cellHash = perm[(cx & 255) + rowHash];
+          for (let point = 0; point < pointsPerCell; point++) {
+            const entry = jitterEntry(cellHash, point);
+            const dx = cx + jitter[entry * 2] - x;
+            const dy = cy + jitter[entry * 2 + 1] - y;
+            const distance = Math.abs(dx) + Math.abs(dy);
+            if (distance < f1) {
+              f2 = f1;
+              f1 = distance;
+            }
+            else if (distance < f2) {
+              f2 = distance;
+            }
+          }
+        }
+      }
+      result.f1 = f1;
+      result.f2 = f2;
+      return result;
+    };
+  }
+  if (metric === 'chebyshev') {
+    return function cellular2DChebyshev(x: number, y: number): CellularResult {
+      const ix = fastFloor(x);
+      const iy = fastFloor(y);
+      let f1 = Infinity;
+      let f2 = Infinity;
+      for (let oy = -1; oy <= 1; oy++) {
+        const cy = iy + oy;
+        const rowHash = perm[cy & 255];
+        for (let ox = -1; ox <= 1; ox++) {
+          const cx = ix + ox;
+          const cellHash = perm[(cx & 255) + rowHash];
+          for (let point = 0; point < pointsPerCell; point++) {
+            const entry = jitterEntry(cellHash, point);
+            const dx = cx + jitter[entry * 2] - x;
+            const dy = cy + jitter[entry * 2 + 1] - y;
+            const distance = Math.max(Math.abs(dx), Math.abs(dy));
+            if (distance < f1) {
+              f2 = f1;
+              f1 = distance;
+            }
+            else if (distance < f2) {
+              f2 = distance;
+            }
+          }
+        }
+      }
+      result.f1 = f1;
+      result.f2 = f2;
+      return result;
+    };
+  }
+  return function cellular2D(x: number, y: number): CellularResult {
+    const ix = fastFloor(x);
+    const iy = fastFloor(y);
+    let f1 = Infinity;
+    let f2 = Infinity;
+    for (let oy = -1; oy <= 1; oy++) {
+      const cy = iy + oy;
+      const rowHash = perm[cy & 255];
+      for (let ox = -1; ox <= 1; ox++) {
+        const cx = ix + ox;
+        // identical cell hashing scheme as the 2D simplex implementation
+        const cellHash = perm[(cx & 255) + rowHash];
+        for (let point = 0; point < pointsPerCell; point++) {
+          const entry = jitterEntry(cellHash, point);
+          const dx = cx + jitter[entry * 2] - x;
+          const dy = cy + jitter[entry * 2 + 1] - y;
+          const distance = dx * dx + dy * dy;
+          if (distance < f1) {
+            f2 = f1;
+            f1 = distance;
+          }
+          else if (distance < f2) {
+            f2 = distance;
+          }
+        }
+      }
+    }
+    result.f1 = Math.sqrt(f1);
+    result.f2 = Math.sqrt(f2);
+    return result;
+  };
+}
+
+/**
+ * Creates a 3D Worley/cellular noise function.
+ *
+ * Grid cells are identified with the same permutation table hashing used by
+ * {@link createNoise3D}; only the feature point search and the F1/F2 distance
+ * combination are specific to this function.
+ * @param random the random function that will be used to build the permutation table
+ * @param options metric and feature point density options
+ * @returns {CellularFunction3D}
+ */
+export function createCellular3D(random: RandomFn = Math.random, options: CellularOptions = {}): CellularFunction3D {
+  const perm = buildPermutationTable(random);
+  const metric: CellularMetric = options.metric === undefined ? 'euclidean' : options.metric;
+  const pointsPerCell = Math.max(1, Math.floor(options.pointsPerCell === undefined ? 1 : options.pointsPerCell));
+  // three jitter components per entry, all derived from the shared permutation table
+  const jitter = buildJitterTable(3);
+  const result: CellularResult = { f1: 0, f2: 0 };
+  // Fast path for the common single feature point case.
+  if (pointsPerCell === 1) {
+    if (metric === 'manhattan') {
+      return function cellular3DManhattan(x: number, y: number, z: number): CellularResult {
+        const ix = fastFloor(x);
+        const iy = fastFloor(y);
+        const iz = fastFloor(z);
+        let f1 = Infinity;
+        let f2 = Infinity;
+        for (let oz = -1; oz <= 1; oz++) {
+          const cz = iz + oz;
+          const planeHash = perm[cz & 255];
+          for (let oy = -1; oy <= 1; oy++) {
+            const cy = iy + oy;
+            const rowHash = perm[(cy & 255) + planeHash];
+            for (let ox = -1; ox <= 1; ox++) {
+              const cx = ix + ox;
+              const j = perm[(cx & 255) + rowHash] * 3;
+              const distance = Math.abs(cx + jitter[j] - x)
+                + Math.abs(cy + jitter[j + 1] - y)
+                + Math.abs(cz + jitter[j + 2] - z);
+              if (distance < f1) {
+                f2 = f1;
+                f1 = distance;
+              }
+              else if (distance < f2) {
+                f2 = distance;
+              }
+            }
+          }
+        }
+        result.f1 = f1;
+        result.f2 = f2;
+        return result;
+      };
+    }
+    if (metric === 'chebyshev') {
+      return function cellular3DChebyshev(x: number, y: number, z: number): CellularResult {
+        const ix = fastFloor(x);
+        const iy = fastFloor(y);
+        const iz = fastFloor(z);
+        let f1 = Infinity;
+        let f2 = Infinity;
+        for (let oz = -1; oz <= 1; oz++) {
+          const cz = iz + oz;
+          const planeHash = perm[cz & 255];
+          for (let oy = -1; oy <= 1; oy++) {
+            const cy = iy + oy;
+            const rowHash = perm[(cy & 255) + planeHash];
+            for (let ox = -1; ox <= 1; ox++) {
+              const cx = ix + ox;
+              const j = perm[(cx & 255) + rowHash] * 3;
+              const distance = Math.max(
+                Math.max(Math.abs(cx + jitter[j] - x), Math.abs(cy + jitter[j + 1] - y)),
+                Math.abs(cz + jitter[j + 2] - z)
+              );
+              if (distance < f1) {
+                f2 = f1;
+                f1 = distance;
+              }
+              else if (distance < f2) {
+                f2 = distance;
+              }
+            }
+          }
+        }
+        result.f1 = f1;
+        result.f2 = f2;
+        return result;
+      };
+    }
+    return function cellular3D(x: number, y: number, z: number): CellularResult {
+      const ix = fastFloor(x);
+      const iy = fastFloor(y);
+      const iz = fastFloor(z);
+      let f1 = Infinity;
+      let f2 = Infinity;
+      const xMasked = ix & 255;
+      for (let oz = -1; oz <= 1; oz++) {
+        const cz = iz + oz;
+        const planeHash = perm[cz & 255];
+        for (let oy = -1; oy <= 1; oy++) {
+          const cy = iy + oy;
+          const rowHash = perm[(cy & 255) + planeHash];
+          // The three x neighbours are fixed per row; resolve their jitter
+          // entries up front and evaluate them without a third nested loop.
+          const j0 = perm[((xMasked + 255) & 255) + rowHash] * 3;
+          const j1 = perm[xMasked + rowHash] * 3;
+          const j2 = perm[((xMasked + 1) & 255) + rowHash] * 3;
+          const cx0 = ix - 1;
+          const cx2 = ix + 1;
+          let dx = cx0 + jitter[j0] - x;
+          let dy = cy + jitter[j0 + 1] - y;
+          let dz = cz + jitter[j0 + 2] - z;
+          let distance = dx * dx + dy * dy + dz * dz;
+          if (distance < f1) {
+            f2 = f1;
+            f1 = distance;
+          }
+          else if (distance < f2) {
+            f2 = distance;
+          }
+          dx = ix + jitter[j1] - x;
+          dy = cy + jitter[j1 + 1] - y;
+          dz = cz + jitter[j1 + 2] - z;
+          distance = dx * dx + dy * dy + dz * dz;
+          if (distance < f1) {
+            f2 = f1;
+            f1 = distance;
+          }
+          else if (distance < f2) {
+            f2 = distance;
+          }
+          dx = cx2 + jitter[j2] - x;
+          dy = cy + jitter[j2 + 1] - y;
+          dz = cz + jitter[j2 + 2] - z;
+          distance = dx * dx + dy * dy + dz * dz;
+          if (distance < f1) {
+            f2 = f1;
+            f1 = distance;
+          }
+          else if (distance < f2) {
+            f2 = distance;
+          }
+        }
+      }
+      result.f1 = Math.sqrt(f1);
+      result.f2 = Math.sqrt(f2);
+      return result;
+    };
+  }
+  if (metric === 'manhattan') {
+    return function cellular3DManhattan(x: number, y: number, z: number): CellularResult {
+      const ix = fastFloor(x);
+      const iy = fastFloor(y);
+      const iz = fastFloor(z);
+      let f1 = Infinity;
+      let f2 = Infinity;
+      for (let oz = -1; oz <= 1; oz++) {
+        const cz = iz + oz;
+        const planeHash = perm[cz & 255];
+        for (let oy = -1; oy <= 1; oy++) {
+          const cy = iy + oy;
+          const rowHash = perm[(cy & 255) + planeHash];
+          for (let ox = -1; ox <= 1; ox++) {
+            const cx = ix + ox;
+            const cellHash = perm[(cx & 255) + rowHash];
+            for (let point = 0; point < pointsPerCell; point++) {
+              const entry = jitterEntry(cellHash, point);
+              const j = entry * 3;
+              const dx = cx + jitter[j] - x;
+              const dy = cy + jitter[j + 1] - y;
+              const dz = cz + jitter[j + 2] - z;
+              const distance = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+              if (distance < f1) {
+                f2 = f1;
+                f1 = distance;
+              }
+              else if (distance < f2) {
+                f2 = distance;
+              }
+            }
+          }
+        }
+      }
+      result.f1 = f1;
+      result.f2 = f2;
+      return result;
+    };
+  }
+  if (metric === 'chebyshev') {
+    return function cellular3DChebyshev(x: number, y: number, z: number): CellularResult {
+      const ix = fastFloor(x);
+      const iy = fastFloor(y);
+      const iz = fastFloor(z);
+      let f1 = Infinity;
+      let f2 = Infinity;
+      for (let oz = -1; oz <= 1; oz++) {
+        const cz = iz + oz;
+        const planeHash = perm[cz & 255];
+        for (let oy = -1; oy <= 1; oy++) {
+          const cy = iy + oy;
+          const rowHash = perm[(cy & 255) + planeHash];
+          for (let ox = -1; ox <= 1; ox++) {
+            const cx = ix + ox;
+            const cellHash = perm[(cx & 255) + rowHash];
+            for (let point = 0; point < pointsPerCell; point++) {
+              const entry = jitterEntry(cellHash, point);
+              const j = entry * 3;
+              const dx = cx + jitter[j] - x;
+              const dy = cy + jitter[j + 1] - y;
+              const dz = cz + jitter[j + 2] - z;
+              const distance = Math.max(Math.max(Math.abs(dx), Math.abs(dy)), Math.abs(dz));
+              if (distance < f1) {
+                f2 = f1;
+                f1 = distance;
+              }
+              else if (distance < f2) {
+                f2 = distance;
+              }
+            }
+          }
+        }
+      }
+      result.f1 = f1;
+      result.f2 = f2;
+      return result;
+    };
+  }
+  return function cellular3D(x: number, y: number, z: number): CellularResult {
+    const ix = fastFloor(x);
+    const iy = fastFloor(y);
+    const iz = fastFloor(z);
+    let f1 = Infinity;
+    let f2 = Infinity;
+    for (let oz = -1; oz <= 1; oz++) {
+      const cz = iz + oz;
+      const planeHash = perm[cz & 255];
+      for (let oy = -1; oy <= 1; oy++) {
+        const cy = iy + oy;
+        const rowHash = perm[(cy & 255) + planeHash];
+        for (let ox = -1; ox <= 1; ox++) {
+          const cx = ix + ox;
+          // identical cell hashing scheme as the 3D simplex implementation
+          const cellHash = perm[(cx & 255) + rowHash];
+          for (let point = 0; point < pointsPerCell; point++) {
+            const entry = jitterEntry(cellHash, point);
+            const j = entry * 3;
+            const dx = cx + jitter[j] - x;
+            const dy = cy + jitter[j + 1] - y;
+            const dz = cz + jitter[j + 2] - z;
+            const distance = dx * dx + dy * dy + dz * dz;
+            if (distance < f1) {
+              f2 = f1;
+              f1 = distance;
+            }
+            else if (distance < f2) {
+              f2 = distance;
+            }
+          }
+        }
+      }
+    }
+    result.f1 = Math.sqrt(f1);
+    result.f2 = Math.sqrt(f2);
+    return result;
+  };
+}
+
+
 /**
  * Builds a random permutation table.
  * This is exported only for (internal) testing purposes.

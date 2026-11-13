@@ -78,6 +78,8 @@
     "build": "./build.sh",
     "docs": "typedoc --excludePrivate --out public/docs simplex-noise.ts && cp -R doc public/docs/",
     "prepare": "npm run-script build",
-    "benchmark": "npm run build && cd perf && ./benchmark.sh"
+    "benchmark": "npm run build && cd perf && ./benchmark.sh",
+    "benchmark:cellular": "npm run build && node --random_seed=1 --hash_seed=1 --expose-gc perf/cellular-benchmark.js",
+    "render:output": "node perf/render-output.js && python3 perf/annotate-output.py && python3 perf/make-titles.py && python3 perf/render-terminal.py && python3 perf/render-section1.py && bash perf/build-videos.sh"
   }
 }

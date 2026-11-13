@@ -1,0 +1,11 @@
+import { createCellular2D, createCellular3D } from '../../simplex-noise';
+import Alea from 'alea';
+const c2 = createCellular2D(Alea('stone-seed'), { pointsPerCell: 1 });
+const c2m = createCellular2D(Alea('stone-seed'), { metric: 'manhattan' });
+const c2c = createCellular2D(Alea('stone-seed'), { metric: 'chebyshev' });
+const c3 = createCellular3D(Alea('stone-seed'));
+console.log('2D euclidean F1/F2:', JSON.stringify(c2(1.25, 3.5)));
+console.log('2D manhattan F1/F2:', JSON.stringify(c2m(1.25, 3.5)));
+console.log('2D chebyshev F1/F2:', JSON.stringify(c2c(1.25, 3.5)));
+console.log('2D F2-F1 cell border:', (c2(1.25, 3.5).f2 - c2(1.25, 3.5).f1).toFixed(6));
+console.log('3D euclidean F1/F2:', JSON.stringify(c3(1.25, 3.5, -0.75)));
