@@ -109,7 +109,12 @@ export type NoiseFunction2D = (x: number, y: number) => number;
  * @returns {NoiseFunction2D}
  */
 export function createNoise2D(random: RandomFn = Math.random): NoiseFunction2D {
-  const perm = buildPermutationTable(random);
+  return noise2DFromPerm(buildPermutationTable(random));
+}
+
+// internal: builds the 2D sampler from a permutation table.
+// Shared by createNoise2D and the configurable noise field.
+function noise2DFromPerm(perm: Uint8Array): NoiseFunction2D {
   // precalculating this yields a little ~3% performance improvement.
   const permGrad2x = new Float64Array(perm).map(v => grad2[(v % 12) * 2]);
   const permGrad2y = new Float64Array(perm).map(v => grad2[(v % 12) * 2 + 1]);
@@ -199,7 +204,12 @@ export type NoiseFunction3D = (x: number, y: number, z: number) => number;
  * @returns {NoiseFunction3D}
  */
 export function createNoise3D(random: RandomFn = Math.random): NoiseFunction3D {
-  const perm = buildPermutationTable(random);
+  return noise3DFromPerm(buildPermutationTable(random));
+}
+
+// internal: builds the 3D sampler from a permutation table.
+// Shared by createNoise3D and the configurable noise field.
+function noise3DFromPerm(perm: Uint8Array): NoiseFunction3D {
   // precalculating these seems to yield a speedup of over 15%
   const permGrad3x = new Float64Array(perm).map(v => grad3[(v % 12) * 3]);
   const permGrad3y = new Float64Array(perm).map(v => grad3[(v % 12) * 3 + 1]);
@@ -344,7 +354,12 @@ export type NoiseFunction4D = (x: number, y: number, z: number, w: number) => nu
  * @returns {NoiseFunction4D}
  */
 export function createNoise4D(random: RandomFn = Math.random): NoiseFunction4D {
-  const perm = buildPermutationTable(random);
+  return noise4DFromPerm(buildPermutationTable(random));
+}
+
+// internal: builds the 4D sampler from a permutation table.
+// Shared by createNoise4D and the configurable noise field.
+function noise4DFromPerm(perm: Uint8Array): NoiseFunction4D {
   // precalculating these leads to a ~10% speedup
   const permGrad4x = new Float64Array(perm).map(v => grad4[(v % 32) * 4]);
   const permGrad4y = new Float64Array(perm).map(v => grad4[(v % 32) * 4 + 1]);
@@ -497,4 +512,271 @@ export function buildPermutationTable(random: RandomFn): Uint8Array {
     p[i] = p[i - 256];
   }
   return p;
+}
+
+/**
+ * The dimensions supported by the configurable noise field: 2, 3 or 4.
+ */
+export type NoiseDimensions = 2 | 3 | 4;
+
+/**
+ * Upper bound for the number of octaves a noise field stacks in one sample.
+ * This bounds the worst case cost of sample() to
+ * MAX_FIELD_OCTAVES times the cost of one legacy noise call while the
+ * per sample memory usage stays O(1) (no allocations happen while sampling).
+ */
+export const MAX_FIELD_OCTAVES = 32;
+
+/**
+ * Options for createNoiseField.
+ */
+export interface NoiseFieldOptions {
+  /**
+   * Dimensions of the noise field, 2, 3 or 4. Defaults to 2.
+   */
+  dimensions?: NoiseDimensions;
+  /**
+   * Number of octaves stacked into every sample, an integer between
+   * 1 and MAX_FIELD_OCTAVES. Defaults to 1.
+   */
+  octaves?: number;
+  /**
+   * Frequency multiplier applied between consecutive octaves,
+   * a positive finite number. Defaults to 2.0.
+   */
+  lacunarity?: number;
+  /**
+   * Amplitude multiplier applied between consecutive octaves,
+   * a finite number. Defaults to 0.5.
+   */
+  gain?: number;
+  /**
+   * The random function used to derive the master seed of the field.
+   * It is called exactly once. Defaults to Math.random.
+   */
+  random?: RandomFn;
+}
+
+/**
+ * A configurable simplex noise field. One call to sample() evaluates the
+ * complete stack of octaves and returns a value normalized to [-1, 1].
+ *
+ * Resource bounds: an instance holds one 512 byte permutation table plus
+ * dimensions * 4 KiB of precomputed gradients (at most ~16.5 KiB for 4D).
+ * sample() allocates nothing and runs in O(octaves) time with
+ * octaves <= MAX_FIELD_OCTAVES.
+ */
+export interface NoiseField {
+  /**
+   * Dimensions of this field (2, 3 or 4).
+   */
+  readonly dimensions: NoiseDimensions;
+  /**
+   * Number of octaves evaluated per sample.
+   */
+  readonly octaves: number;
+  /**
+   * Frequency multiplier between octaves.
+   */
+  readonly lacunarity: number;
+  /**
+   * Amplitude multiplier between octaves.
+   */
+  readonly gain: number;
+  /**
+   * Samples the complete octave stack in one call.
+   * Coordinates must be finite numbers, bigger than -2^31 and smaller than 2^31.
+   * @returns a number in the interval [-1, 1]
+   */
+  sample(x: number, y: number, z?: number, w?: number): number;
+  /**
+   * Derives a field with the same seed and octave configuration in other
+   * dimensions. The derivation is deterministic and order independent, and
+   * every dimension uses its own domain separated permutation table, so
+   * fields never share permutation state across dimensions.
+   */
+  forDimensions(dimensions: NoiseDimensions): NoiseField;
+}
+
+// Per dimension salts for domain separation. Fields built from the same
+// master seed get statistically independent permutation tables per dimension,
+// so the same seed can never bleed structure across dimensions.
+const DIMENSION_SALTS = [0, 0, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+
+// Deterministic 32 bit PRNG (mulberry32) used to derive per dimension
+// permutation tables from the master seed.
+function mulberry32(seed: number): RandomFn {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function validateDimensions(dimensions: number): NoiseDimensions {
+  if (dimensions !== 2 && dimensions !== 3 && dimensions !== 4) {
+    throw new RangeError(`dimensions must be 2, 3 or 4, got ${dimensions}`);
+  }
+  return dimensions;
+}
+
+function assertFiniteCoordinate(name: string, value: number): void {
+  if (typeof value !== 'number') {
+    throw new TypeError(`coordinate ${name} must be a number, got ${typeof value}`);
+  }
+  if (!Number.isFinite(value)) {
+    throw new RangeError(`coordinate ${name} must be finite, got ${value}`);
+  }
+}
+
+function makeSampler2D(noise: NoiseFunction2D, octaves: number, lacunarity: number, gain: number): NoiseFunction2D {
+  if (octaves === 1) {
+    return function sample(x: number, y: number): number {
+      assertFiniteCoordinate('x', x);
+      assertFiniteCoordinate('y', y);
+      return noise(x, y);
+    };
+  }
+  return function sample(x: number, y: number): number {
+    assertFiniteCoordinate('x', x);
+    assertFiniteCoordinate('y', y);
+    let amplitude = 1.0;
+    let frequency = 1.0;
+    let sum = 0.0;
+    let normalization = 0.0;
+    for (let octave = 0; octave < octaves; octave++) {
+      sum += amplitude * noise(x * frequency, y * frequency);
+      normalization += amplitude;
+      amplitude *= gain;
+      frequency *= lacunarity;
+    }
+    return sum / normalization;
+  };
+}
+
+function makeSampler3D(noise: NoiseFunction3D, octaves: number, lacunarity: number, gain: number): NoiseFunction3D {
+  if (octaves === 1) {
+    return function sample(x: number, y: number, z: number): number {
+      assertFiniteCoordinate('x', x);
+      assertFiniteCoordinate('y', y);
+      assertFiniteCoordinate('z', z);
+      return noise(x, y, z);
+    };
+  }
+  return function sample(x: number, y: number, z: number): number {
+    assertFiniteCoordinate('x', x);
+    assertFiniteCoordinate('y', y);
+    assertFiniteCoordinate('z', z);
+    let amplitude = 1.0;
+    let frequency = 1.0;
+    let sum = 0.0;
+    let normalization = 0.0;
+    for (let octave = 0; octave < octaves; octave++) {
+      sum += amplitude * noise(x * frequency, y * frequency, z * frequency);
+      normalization += amplitude;
+      amplitude *= gain;
+      frequency *= lacunarity;
+    }
+    return sum / normalization;
+  };
+}
+
+function makeSampler4D(noise: NoiseFunction4D, octaves: number, lacunarity: number, gain: number): NoiseFunction4D {
+  if (octaves === 1) {
+    return function sample(x: number, y: number, z: number, w: number): number {
+      assertFiniteCoordinate('x', x);
+      assertFiniteCoordinate('y', y);
+      assertFiniteCoordinate('z', z);
+      assertFiniteCoordinate('w', w);
+      return noise(x, y, z, w);
+    };
+  }
+  return function sample(x: number, y: number, z: number, w: number): number {
+    assertFiniteCoordinate('x', x);
+    assertFiniteCoordinate('y', y);
+    assertFiniteCoordinate('z', z);
+    assertFiniteCoordinate('w', w);
+    let amplitude = 1.0;
+    let frequency = 1.0;
+    let sum = 0.0;
+    let normalization = 0.0;
+    for (let octave = 0; octave < octaves; octave++) {
+      sum += amplitude * noise(x * frequency, y * frequency, z * frequency, w * frequency);
+      normalization += amplitude;
+      amplitude *= gain;
+      frequency *= lacunarity;
+    }
+    return sum / normalization;
+  };
+}
+
+function buildField(dimensions: NoiseDimensions, octaves: number, lacunarity: number, gain: number, masterSeed: number): NoiseField {
+  const tableRandom = mulberry32((masterSeed ^ DIMENSION_SALTS[dimensions]) >>> 0);
+  const perm = buildPermutationTable(tableRandom);
+  let sample: NoiseField['sample'];
+  if (dimensions === 2) {
+    sample = makeSampler2D(noise2DFromPerm(perm), octaves, lacunarity, gain);
+  }
+  else if (dimensions === 3) {
+    sample = makeSampler3D(noise3DFromPerm(perm), octaves, lacunarity, gain);
+  }
+  else {
+    sample = makeSampler4D(noise4DFromPerm(perm), octaves, lacunarity, gain);
+  }
+  return {
+    dimensions,
+    octaves,
+    lacunarity,
+    gain,
+    sample,
+    forDimensions: (d: NoiseDimensions) => buildField(validateDimensions(d), octaves, lacunarity, gain, masterSeed),
+  };
+}
+
+/**
+ * Creates a configurable simplex noise field.
+ *
+ * The field evaluates octaves (fractal Brownian motion) with the given
+ * lacunarity and gain in a single sample() call. The provided random
+ * function is consumed exactly once to derive a 32 bit master seed; every
+ * dimension gets its own deterministic, domain separated permutation table,
+ * so the same seed produces independent fields in 2D, 3D and 4D.
+ *
+ * @param options field configuration, see NoiseFieldOptions
+ * @returns {NoiseField}
+ */
+export function createNoiseField(options: NoiseFieldOptions = {}): NoiseField {
+  if (options === null || typeof options !== 'object') {
+    throw new TypeError('options must be an object');
+  }
+  const dimensions = validateDimensions(options.dimensions === undefined ? 2 : options.dimensions);
+  const octaves = options.octaves === undefined ? 1 : options.octaves;
+  if (typeof octaves !== 'number') {
+    throw new TypeError(`octaves must be a number, got ${typeof octaves}`);
+  }
+  if (!Number.isInteger(octaves) || octaves < 1 || octaves > MAX_FIELD_OCTAVES) {
+    throw new RangeError(`octaves must be an integer between 1 and ${MAX_FIELD_OCTAVES}, got ${octaves}`);
+  }
+  const lacunarity = options.lacunarity === undefined ? 2.0 : options.lacunarity;
+  if (typeof lacunarity !== 'number') {
+    throw new TypeError(`lacunarity must be a number, got ${typeof lacunarity}`);
+  }
+  if (!Number.isFinite(lacunarity) || lacunarity <= 0) {
+    throw new RangeError(`lacunarity must be a positive finite number, got ${lacunarity}`);
+  }
+  const gain = options.gain === undefined ? 0.5 : options.gain;
+  if (typeof gain !== 'number') {
+    throw new TypeError(`gain must be a number, got ${typeof gain}`);
+  }
+  if (!Number.isFinite(gain)) {
+    throw new RangeError(`gain must be a finite number, got ${gain}`);
+  }
+  const random = options.random === undefined ? Math.random : options.random;
+  if (typeof random !== 'function') {
+    throw new TypeError('random must be a function');
+  }
+  const masterSeed = Math.floor(random() * 0x100000000) >>> 0;
+  return buildField(dimensions, octaves, lacunarity, gain, masterSeed);
 }
