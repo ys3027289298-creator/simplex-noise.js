@@ -83,6 +83,32 @@ console.log(noise2D(x, y));
 
 The ALEA PRNG used in the example above can be found in the [alea](https://npmjs.org/package/alea) npm package.
 
+### Value noise (cheaper alternative)
+
+`createValueNoise2D` and `createValueNoise3D` are cheaper than the simplex
+functions and useful where a softer, low-frequency field is acceptable or
+desired (background layers, masks, fills). They reuse the same permutation
+table, the same `RandomFn` seeding contract and the same `[-1, 1]` output
+range.
+
+```javascript
+import { createValueNoise2D } from 'simplex-noise';
+import alea from 'alea';
+const valueNoise2D = createValueNoise2D(alea('seed'));
+console.log(valueNoise2D(x, y));
+```
+
+Measured on the reference machine (see `perf/` and `artifacts/REPORT.md`):
+about **2–3x** the 2D throughput and **1.1–1.5x** the 3D throughput of simplex
+noise (the range spans two independent benchmark loop shapes on a shared,
+intermittently busy host), using **4,608 B** of retained typed-array state
+instead of 8,704 B (2D) / 12,800 B (3D).
+The tradeoff is quality: the histogram differs from simplex by 13.3% (2D) /
+15.7% (3D) total variation, and the field has roughly 42x less power above
+half Nyquist, so it reads as blocky/band-limited rather than broad-band and
+isotropic. Both families are reproducible from the same seed.
+
+
 ## Benchmarks
 
 simplex-noise.js is reasonably quick.

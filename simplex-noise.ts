@@ -498,3 +498,113 @@ export function buildPermutationTable(random: RandomFn): Uint8Array {
   }
   return p;
 }
+
+/**
+ * Quintic interpolant used by value noise.
+ * 6t^5 - 15t^4 + 10t^3
+ * @private
+ */
+const fade = (t: number) => t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+
+/**
+ * Linear interpolation between a and b by t.
+ * @private
+ */
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/**
+ * Precalculates the value noise lookup table, mapping permutation bytes onto
+ * [-1, 1]. Reuses the exact permutation bytes simplex noise uses.
+ * @private
+ */
+function buildValueTable(perm: Uint8Array): Float64Array {
+  // a full 512 entry copy, mirroring the simplex gradient table precalculation
+  return new Float64Array(perm).map(v => v / 127.5 - 1.0);
+}
+
+/**
+ * Samples the value noise field in two dimensions
+ *
+ * Coordinates should be finite, bigger than -2^31 and smaller than 2^31.
+ * @param x
+ * @param y
+ * @returns a number in the interval [-1, 1]
+ */
+export type ValueNoiseFunction2D = (x: number, y: number) => number;
+
+/**
+ * Creates a 2D value noise function
+ *
+ * Value noise hashes the four lattice corners and interpolates their values,
+ * instead of evaluating gradients on a simplex. It reuses the same
+ * permutation table and quintic fade curve as the simplex functions, so it
+ * costs less per call at the price of a softer, more band-limited field.
+ * @param random the random function that will be used to build the permutation table
+ * @returns {ValueNoiseFunction2D}
+ */
+export function createValueNoise2D(random: RandomFn = Math.random): ValueNoiseFunction2D {
+  const perm = buildPermutationTable(random);
+  const valueTable = buildValueTable(perm);
+  return function valueNoise2D(x: number, y: number): number {
+    // plain Math.floor, not fastFloor: value noise needs only the integer
+    // lattice cell and the true fractional part, and this stays correct for
+    // coordinates beyond the int32 range where fastFloor's `| 0` would wrap
+    const xf = Math.floor(x);
+    const yf = Math.floor(y);
+    const u = fade(x - xf);
+    const v = fade(y - yf);
+    const ii = xf & 255;
+    const jj = yf & 255;
+    const a = valueTable[ii + perm[jj]];
+    const b = valueTable[ii + 1 + perm[jj]];
+    const c = valueTable[ii + perm[jj + 1]];
+    const d = valueTable[ii + 1 + perm[jj + 1]];
+    return lerp(lerp(a, b, u), lerp(c, d, u), v);
+  };
+}
+
+/**
+ * Samples the value noise field in three dimensions
+ *
+ * Coordinates should be finite, bigger than -2^31 and smaller than 2^31.
+ * @param x
+ * @param y
+ * @param z
+ * @returns a number in the interval [-1, 1]
+ */
+export type ValueNoiseFunction3D = (x: number, y: number, z: number) => number;
+
+/**
+ * Creates a 3D value noise function
+ *
+ * @param random the random function that will be used to build the permutation table
+ * @returns {ValueNoiseFunction3D}
+ */
+export function createValueNoise3D(random: RandomFn = Math.random): ValueNoiseFunction3D {
+  const perm = buildPermutationTable(random);
+  const valueTable = buildValueTable(perm);
+  return function valueNoise3D(x: number, y: number, z: number): number {
+    const xf = Math.floor(x);
+    const yf = Math.floor(y);
+    const zf = Math.floor(z);
+    const u = fade(x - xf);
+    const v = fade(y - yf);
+    const w = fade(z - zf);
+    const ii = xf & 255;
+    const jj = yf & 255;
+    const kk = zf & 255;
+    const a = valueTable[ii + perm[jj + perm[kk]]];
+    const b = valueTable[ii + 1 + perm[jj + perm[kk]]];
+    const c = valueTable[ii + perm[jj + 1 + perm[kk]]];
+    const d = valueTable[ii + 1 + perm[jj + 1 + perm[kk]]];
+    const e = valueTable[ii + perm[jj + perm[kk + 1]]];
+    const f = valueTable[ii + 1 + perm[jj + perm[kk + 1]]];
+    const g = valueTable[ii + perm[jj + 1 + perm[kk + 1]]];
+    const h = valueTable[ii + 1 + perm[jj + 1 + perm[kk + 1]]];
+    return lerp(
+      lerp(lerp(a, b, u), lerp(c, d, u), v),
+      lerp(lerp(e, f, u), lerp(g, h, u), v),
+      w
+    );
+  };
+}
